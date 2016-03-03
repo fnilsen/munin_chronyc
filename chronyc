@@ -1,0 +1,94 @@
+#!/usr/bin/perl -w
+#
+# Script to parse Chrony Tracking Output
+# Based on the chrony plugin by joti and zjttoefs.
+#
+# Parameters understood:
+#
+#       config   (required)
+#       autoconf (optional - used by munin-config)
+#
+# $log$
+# Revision 0.1 2016/03/03 00:00:00 fnilsen
+# Perl version of the chrony plugin (bash) by joti and zjttoefs.
+# This version does not depend on the number- and order of lines
+# printed by `chronyc tracking`, but rather looks for specific
+# labels (defined in @metrics). Disclaimer: I don't know perl.
+#
+#
+#%# family=auto
+#%# capabilities=autoconf
+
+use strict;
+
+# Modify this to fit other chronyc path
+my $CHRONYC = '/usr/bin/chronyc';
+
+my @metrics = (
+      # Label, scale factor, display unit
+      # Label must match chronyc output.
+      ['Stratum',              1, '']
+    , ['System time',       1000, 'secs']
+    , ['Frequency',            1, 'ppm']
+    , ['Residual freq',      100, 'ppm']
+    , ['Skew',               100, 'ppm']
+    , ['Root delay',        1000, 'secs']
+    , ['Root dispersion',   1000, 'secs']
+);
+
+if ($ARGV[0] and $ARGV[0] eq "config")
+{
+    print "graph_title Chrony tracking\n";
+    print "graph_args --base 1000 -l 0\n";
+    print "units (seconds,ppm)\n";
+        print "graph_category ntp\n";
+
+    for my $m (@metrics)
+    {
+        my ($label, $factor, $unit) = @$m;
+
+        # Use lowercased & sanitized label as field id
+        my $id = label_to_id($label);
+
+        # Append scaling factor is not x1
+        my $labelFac = $factor ne 1 ? ", x$factor" : '';
+
+        print "$id.label $label ($unit$labelFac)\n";
+        print "$id.type GAUGE\n";
+    }
+}
+
+else
+{
+    # Run `chronyc tracking` and pipe each line of output into script.
+    open(CHRONY_OUT, $CHRONYC . " tracking |") || die $CHRONYC . ": $!\n";
+    while( defined(my $line = <CHRONY_OUT>) )
+    {
+        # Capture label before : and first "word" after it.
+        if(not $line =~ m/^([^:]+):\s+([^\s]+).*/) { next; }
+
+        my $id = label_to_id($1);
+
+        # Unsure about this.. if line contains 'slow', change sign.
+        my $sign = ($line =~ /slow/) ? -1 : 1;
+
+        # Print "id.label val" if id is present in metrics list.
+        for my $m (@metrics)
+        {
+            my ($label, $factor, $unit) = @$m;
+            if( label_to_id($label) eq $id )
+            {
+                print "$id.value " . ($2*$sign*$factor) . "\n";
+            }
+        }
+    }
+}
+
+# Lowercase and sanitize label
+sub label_to_id 
+{
+    my $id = lc($_[0]);
+    $id =~ s/[^\w]//g;
+    return $id;
+}
+
